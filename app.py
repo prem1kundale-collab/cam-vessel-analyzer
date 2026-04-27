@@ -12,24 +12,26 @@ st.title("🔬 CAM Assay Blood Vessel Analyzer (Pro)")
 
 # --- INTERACTIVE SIDEBAR CONTROLS ---
 st.sidebar.header("⚙️ Algorithm Tuning")
-auto_tune = st.sidebar.checkbox("🤖 Auto-Tune Parameters", value=True)
+auto_tune = st.sidebar.checkbox("🤖 Auto-Tune Parameters", value=True, help="Automatically calculates the best strictness based on lighting.")
 
 st.sidebar.markdown("---")
-st.sidebar.write("**Manual Override**")
+st.sidebar.write("**Manual Override** (Uncheck Auto-Tune to use these)")
 threshold_val = st.sidebar.slider("Vessel Strictness", 1, 50, 5, disabled=auto_tune)
 blur_val = st.sidebar.slider("Cookie Cutter Blur", 11, 201, 41, step=2, disabled=auto_tune)
 
 st.sidebar.markdown("---")
 st.sidebar.write("**🩸 Vein Classification Tuning**")
 st.sidebar.info("Adjust these to match your microscope's zoom level.")
-primary_thresh = st.sidebar.slider("Primary Min Radius (px)", 2.0, 20.0, 3.0, step=0.5)
+primary_thresh = st.sidebar.slider("Primary Min Radius (px)", 1.0, 20.0, 3.0, step=0.5)
 secondary_thresh = st.sidebar.slider("Secondary Min Radius (px)", 0.5, 10.0, 1.5, step=0.5)
 
 def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thresh):
+    # Extract green channel for best contrast
     green_channel = img[:, :, 1] 
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     enhanced_img = clahe.apply(green_channel)
     
+    # --- 1. EMBRYO DIAMETER (ROI MASK) ---
     if auto:
         calc_blur = int(img.shape[1] * 0.05)
         blur_size = calc_blur if calc_blur % 2 != 0 else calc_blur + 1
@@ -51,6 +53,7 @@ def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thres
         kernel = np.ones((15, 15), np.uint8)
         egg_mask = cv2.erode(egg_mask, kernel, iterations=2)
 
+    # --- 2. VESSEL DETECTION ---
     inverted_img = cv2.bitwise_not(enhanced_img)
     vessels = frangi(inverted_img, sigmas=range(1, 10, 2), black_ridges=False)
     vessels_norm = cv2.normalize(vessels, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
@@ -66,6 +69,7 @@ def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thres
     
     total_area_px = np.sum(binary_mask > 0)
     
+    # --- 3. SKELETONIZATION & BRANCHING ---
     bool_mask = binary_mask > 0
     skeleton = morphology.skeletonize(bool_mask)
     
@@ -77,7 +81,7 @@ def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thres
     num_branches = np.sum(branch_points)
     total_length = np.sum(skeleton)
     
-    # --- COLOR CODED VEIN HIERARCHY ---
+    # --- 4. COLOR CODED VEIN HIERARCHY ---
     dist_transform = cv2.distanceTransform(binary_mask, cv2.DIST_L2, 5)
     
     primary_mask = (skeleton) & (dist_transform > p_thresh)
@@ -88,12 +92,19 @@ def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thres
     secondary_vessels = np.sum(secondary_mask)
     tertiary_vessels = np.sum(tertiary_mask)
     
-    # Create the visual map (RGB)
-    color_map = np.zeros((*skeleton.shape, 3), dtype=np.uint8)
-    color_map[primary_mask] = [255, 50, 50]    # Red for Primary
-    color_map[secondary_mask] = [50, 255, 50]  # Green for Secondary
-    color_map[tertiary_mask] = [50, 50, 255]   # Blue for Tertiary
+    # Visual Magnifier: Thicken the lines to 3px so they are visible on web browsers
+    kernel_vis = np.ones((3,3), np.uint8)
+    vis_primary = cv2.dilate(primary_mask.astype(np.uint8), kernel_vis, iterations=1) > 0
+    vis_secondary = cv2.dilate(secondary_mask.astype(np.uint8), kernel_vis, iterations=1) > 0
+    vis_tertiary = cv2.dilate(tertiary_mask.astype(np.uint8), kernel_vis, iterations=1) > 0
     
+    # Paint the RGB color map (Drawn in reverse order so Red arteries sit on top)
+    color_map = np.zeros((*skeleton.shape, 3), dtype=np.uint8)
+    color_map[vis_tertiary] = [50, 50, 255]   # Blue for Tertiary
+    color_map[vis_secondary] = [50, 255, 50]  # Green for Secondary
+    color_map[vis_primary] = [255, 50, 50]    # Red for Primary
+    
+    # Overlay Branch Points (Red Dots)
     img_overlay = img.copy()
     y, x = np.where(branch_points)
     for i in range(len(x)):
@@ -111,7 +122,8 @@ def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thres
         "tertiary": int(tertiary_vessels),
         "color_map": color_map,
         "overlay_img": img_overlay,
-        "mask_img": egg_mask
+        "mask_img": egg_mask,
+        "skeleton_img": skeleton
     }
 
 # --- TABS LAYOUT ---
@@ -152,7 +164,7 @@ with tab1:
             "Secondary Veins (Green)": results['secondary'],
             "Tertiary Veins (Blue)": results['tertiary']
         }])
-        st.download_button("💾 Download Data as CSV", data=df.to_csv(index=False).encode('utf-8'), file_name=f"cam_analysis.csv", mime="text/csv")
+        st.download_button("💾 Download Data as CSV", data=df.to_csv(index=False).encode('utf-8'), file_name=f"cam_analysis_{uploaded_file.name}.csv", mime="text/csv")
         
         st.write("---")
         st.subheader("📷 Visual Results")
