@@ -71,38 +71,4 @@ def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thres
     
     if auto:
         otsu_thresh, _ = cv2.threshold(vessels_norm, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        final_thresh = max(1, int(otsu_thresh * 0.5))
-    else:
-        final_thresh = thresh_manual
-
-    _, binary_mask = cv2.threshold(vessels_norm, final_thresh, 255, cv2.THRESH_BINARY)
-    binary_mask = cv2.bitwise_and(binary_mask, binary_mask, mask=egg_mask)
-    
-    total_area_px = np.sum(binary_mask > 0)
-    vessel_density = (total_area_px / embryo_area_px * 100) if embryo_area_px > 0 else 0
-    
-    bool_mask = binary_mask > 0
-    skeleton = morphology.skeletonize(bool_mask)
-    
-    kernel_conv = np.array([[1, 1, 1], [1, 10, 1], [1, 1, 1]])
-    skeleton_int = skeleton.astype(np.uint8)
-    filtered = convolve(skeleton_int, kernel_conv, mode='constant')
-    
-    branch_points = filtered > 12
-    num_branches = np.sum(branch_points)
-    total_length = np.sum(skeleton)
-    avg_width = (total_area_px / total_length) if total_length > 0 else 0
-    
-    dist_transform = cv2.distanceTransform(binary_mask, cv2.DIST_L2, 5)
-    
-    primary_mask = (skeleton) & (dist_transform > p_thresh)
-    secondary_mask = (skeleton) & (dist_transform > s_thresh) & (dist_transform <= p_thresh)
-    tertiary_mask = (skeleton) & (dist_transform > 0) & (dist_transform <= s_thresh)
-    
-    primary_vessels = np.sum(primary_mask)
-    secondary_vessels = np.sum(secondary_mask)
-    tertiary_vessels = np.sum(tertiary_mask)
-    
-    kernel_vis = np.ones((3,3), np.uint8)
-    vis_primary = cv2.dilate(primary_mask.astype(np.uint8), kernel_vis, iterations=1) > 0
-    vis_secondary = cv
+        final_thresh
