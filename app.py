@@ -84,4 +84,25 @@ def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thres
     bool_mask = binary_mask > 0
     skeleton = morphology.skeletonize(bool_mask)
     
-    kernel
+    kernel_conv = np.array([[1, 1, 1], [1, 10, 1], [1, 1, 1]])
+    skeleton_int = skeleton.astype(np.uint8)
+    filtered = convolve(skeleton_int, kernel_conv, mode='constant')
+    
+    branch_points = filtered > 12
+    num_branches = np.sum(branch_points)
+    total_length = np.sum(skeleton)
+    avg_width = (total_area_px / total_length) if total_length > 0 else 0
+    
+    dist_transform = cv2.distanceTransform(binary_mask, cv2.DIST_L2, 5)
+    
+    primary_mask = (skeleton) & (dist_transform > p_thresh)
+    secondary_mask = (skeleton) & (dist_transform > s_thresh) & (dist_transform <= p_thresh)
+    tertiary_mask = (skeleton) & (dist_transform > 0) & (dist_transform <= s_thresh)
+    
+    primary_vessels = np.sum(primary_mask)
+    secondary_vessels = np.sum(secondary_mask)
+    tertiary_vessels = np.sum(tertiary_mask)
+    
+    kernel_vis = np.ones((3,3), np.uint8)
+    vis_primary = cv2.dilate(primary_mask.astype(np.uint8), kernel_vis, iterations=1) > 0
+    vis_secondary = cv
