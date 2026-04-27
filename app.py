@@ -119,4 +119,6 @@ def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thres
     vis_tertiary = cv2.dilate(tertiary_mask.astype(np.uint8), kernel_vis, iterations=1) > 0
     
     color_map = np.zeros((*skeleton.shape, 3), dtype=np.uint8)
-    color_map[vis_tertiary] = [50, 50,
+    color_map[vis_tertiary] = [50, 50, 255]
+    color_map[vis_tertiary] = [50, 255, 50]
+    color_map[vis_tertiary] = [255, 50, 50]
