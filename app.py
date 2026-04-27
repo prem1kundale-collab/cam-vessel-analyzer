@@ -119,6 +119,144 @@ def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thres
     vis_tertiary = cv2.dilate(tertiary_mask.astype(np.uint8), kernel_vis, iterations=1) > 0
     
     color_map = np.zeros((*skeleton.shape, 3), dtype=np.uint8)
-    color_map[vis_tertiary] = [50, 50, 255]
-    color_map[vis_tertiary] = [50, 255, 50]
-    color_map[vis_tertiary] = [255, 50, 50]
+    color_map[vis_tertiary] = [50, 50, 255]   
+    color_map[vis_secondary] = [50, 255, 50]  
+    color_map[vis_primary] = [255, 50, 50]    
+    
+    img_overlay = img.copy()
+    y, x = np.where(branch_points)
+    for i in range(len(x)):
+        cv2.circle(img_overlay, (x[i], y[i]), 3, (0, 0, 255), -1) 
+        
+    return {
+        "thresh_used": final_thresh, "blur_used": blur_size,
+        "embryo_diameter": embryo_diameter_px * scale_factor,
+        "embryo_area": embryo_area_px * (scale_factor ** 2), 
+        "total_area": total_area_px * (scale_factor ** 2),
+        "vessel_density": vessel_density, 
+        "avg_width": avg_width * scale_factor,
+        "total_length": total_length * scale_factor,
+        "branches": int(num_branches), 
+        "primary_len": primary_length_px * scale_factor,
+        "secondary_len": secondary_length_px * scale_factor,
+        "tertiary_len": tertiary_length_px * scale_factor,
+        "primary_count": primary_count,
+        "secondary_count": secondary_count,
+        "tertiary_count": tertiary_count,
+        "color_map": color_map, "overlay_img": img_overlay, "mask_img": egg_mask, "skeleton_img": skeleton
+    }
+
+# --- TABS AND UPLOAD MENUS LAYOUT ---
+tab1, tab2 = st.tabs(["🔬 Single Image Analysis", "⚖️ Compare Two Assays"])
+
+with tab1:
+    st.write("Upload a single CAM assay image for detailed calibrated analysis.")
+    uploaded_file = st.file_uploader("Upload CAM Image (JPG/PNG)", type=["jpg", "jpeg", "png"], key="single")
+
+    if uploaded_file is not None:
+        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+        image = cv2.imdecode(file_bytes, 1)
+        
+        with st.spinner('Running Mathematical Pipeline...'):
+            results = analyze_cam_vessels(image, auto_tune, threshold_val, blur_val, primary_thresh, secondary_thresh)
+        
+        st.subheader("📊 Detailed Macro Measurements")
+        
+        st.write("**Embryo / Membrane Constraints**")
+        m1, m2, m3 = st.columns(3)
+        m1.metric(f"Embryo Area ({u_label}²)", f"{results['embryo_area']:,.2f}")
+        m2.metric(f"Embryo Diameter ({u_label})", f"{results['embryo_diameter']:,.2f}")
+        m3.metric("Vascular Density", f"{results['vessel_density']:,.2f}%")
+        
+        st.write("---")
+        st.write("**Overall Angiogenesis**")
+        m4, m5, m6, m7 = st.columns(4)
+        m4.metric(f"Total Vessel Area ({u_label}²)", f"{results['total_area']:,.2f}")
+        m5.metric(f"Total Vessel Length ({u_label})", f"{results['total_length']:,.2f}")
+        m6.metric("Branch Points (Count)", f"{results['branches']:,}")
+        m7.metric(f"Avg. Vessel Width ({u_label})", f"{results['avg_width']:,.2f}")
+        
+        st.write("---")
+        st.subheader(f"🩸 Vessel Hierarchy (Lengths vs. Counts)")
+        
+        # Row for Lengths
+        hc1, hc2, hc3, hc4 = st.columns(4)
+        hc1.metric(f"Total Length ({u_label})", f"{results['total_length']:,.2f}")
+        hc2.metric(f"🟥 Primary Length", f"{results['primary_len']:,.2f}")
+        hc3.metric(f"🟩 Secondary Length", f"{results['secondary_len']:,.2f}")
+        hc4.metric(f"🟦 Tertiary Length", f"{results['tertiary_len']:,.2f}")
+        
+        # Row for Counts
+        cc1, cc2, cc3, cc4 = st.columns(4)
+        total_segments = results['primary_count'] + results['secondary_count'] + results['tertiary_count']
+        cc1.metric("Total Segments (Count)", f"{total_segments:,}")
+        cc2.metric("🟥 Primary Count", f"{results['primary_count']:,}")
+        cc3.metric("🟩 Secondary Count", f"{results['secondary_count']:,}")
+        cc4.metric("🟦 Tertiary Count", f"{results['tertiary_count']:,}")
+
+        df = pd.DataFrame([{
+            "Image Name": uploaded_file.name,
+            f"Embryo Area ({u_label}^2)": results['embryo_area'],
+            f"Embryo Diameter ({u_label})": results['embryo_diameter'],
+            "Vascular Density (%)": results['vessel_density'],
+            f"Avg Vessel Width ({u_label})": results['avg_width'],
+            f"Total Vessel Area ({u_label}^2)": results['total_area'],
+            f"Total Vessel Length ({u_label})": results['total_length'],
+            "Branch Intersections": results['branches'],
+            f"Primary Length ({u_label})": results['primary_len'],
+            f"Secondary Length ({u_label})": results['secondary_len'],
+            f"Tertiary Length ({u_label})": results['tertiary_len'],
+            "Primary Veins (Count)": results['primary_count'],
+            "Secondary Veins (Count)": results['secondary_count'],
+            "Tertiary Veins (Count)": results['tertiary_count']
+        }])
+        st.download_button("💾 Download Detailed Data as CSV", data=df.to_csv(index=False).encode('utf-8'), file_name=f"cam_analysis_calibrated_{uploaded_file.name}.csv", mime="text/csv")
+        
+        st.write("---")
+        st.subheader("📷 Visual Results")
+        img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        overlay_rgb = cv2.cvtColor(results['overlay_img'], cv2.COLOR_BGR2RGB)
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.image(img_rgb, caption="Original", use_container_width=True)
+        c2.image(results['mask_img'], caption="Detection Zone", use_container_width=True, clamp=True)
+        c3.image(results['color_map'], caption="Color-Coded Hierarchy", use_container_width=True, clamp=True)
+        c4.image(overlay_rgb, caption="Branch Points", use_container_width=True)
+
+with tab2:
+    st.write("Upload a Control egg and a Treated egg to see a direct data comparison.")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        egg_a = st.file_uploader("Upload Egg A (Control)", type=["jpg", "jpeg", "png"], key="egg_a")
+    with col_b:
+        egg_b = st.file_uploader("Upload Egg B (Treated)", type=["jpg", "jpeg", "png"], key="egg_b")
+
+    if egg_a and egg_b:
+        with st.spinner('Analyzing both assays...'):
+            img_a = cv2.imdecode(np.asarray(bytearray(egg_a.read()), dtype=np.uint8), 1)
+            img_b = cv2.imdecode(np.asarray(bytearray(egg_b.read()), dtype=np.uint8), 1)
+            
+            res_a = analyze_cam_vessels(img_a, auto_tune, threshold_val, blur_val, primary_thresh, secondary_thresh)
+            res_b = analyze_cam_vessels(img_b, auto_tune, threshold_val, blur_val, primary_thresh, secondary_thresh)
+            
+        st.subheader(f"📊 Comparison Chart")
+        
+        comp_df = pd.DataFrame({
+            "Metric": [
+                f"Total Length ({u_label})", "Branch Points", "Vessel Density (%)", 
+                f"Primary Length ({u_label})", "Primary Count", 
+                f"Secondary Length ({u_label})", "Secondary Count"
+            ],
+            "Egg A (Control)": [
+                res_a['total_length'], res_a['branches'], res_a['vessel_density'], 
+                res_a['primary_len'], res_a['primary_count'], 
+                res_a['secondary_len'], res_a['secondary_count']
+            ],
+            "Egg B (Treated)": [
+                res_b['total_length'], res_b['branches'], res_b['vessel_density'], 
+                res_b['primary_len'], res_b['primary_count'], 
+                res_b['secondary_len'], res_b['secondary_count']
+            ]
+        }).set_index("Metric")
+        
+        st.bar_chart(comp_df, height=500)
