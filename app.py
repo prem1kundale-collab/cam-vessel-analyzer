@@ -18,7 +18,7 @@ def analyze_cam_vessels(img):
     enhanced_img = clahe.apply(green_channel)
     
     # --- 1. EMBRYO DIAMETER (ROI MASK) ---
-    blur = cv2.GaussianBlur(green_channel, (41, 41), 0)
+    blur = cv2.GaussianBlur(green_channel, (101, 101), 0)
     _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
@@ -41,7 +41,7 @@ def analyze_cam_vessels(img):
     vessels = frangi(inverted_img, sigmas=range(1, 10, 2), black_ridges=False)
     vessels_norm = cv2.normalize(vessels, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
     
-    _, binary_mask = cv2.threshold(vessels_norm, 15, 255, cv2.THRESH_BINARY)
+    _, binary_mask = cv2.threshold(vessels_norm, 5, 255, cv2.THRESH_BINARY)
     binary_mask = cv2.bitwise_and(binary_mask, binary_mask, mask=egg_mask)
     
     # Total Vessel Area is simply the number of white pixels in the mask
