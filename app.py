@@ -9,32 +9,30 @@ from scipy.ndimage import convolve
 # --- WEB APP INTERFACE SETUP ---
 st.set_page_config(page_title="CAM Vessel Analyzer Pro", layout="wide")
 st.title("🔬 CAM Assay Blood Vessel Analyzer (Pro)")
-st.write("Upload a CAM assay image and use the sidebar to tune the detection algorithm in real-time.")
 
 # --- INTERACTIVE SIDEBAR CONTROLS ---
 st.sidebar.header("⚙️ Algorithm Tuning")
-st.sidebar.write("Adjust these dials until your skeleton mask looks perfect.")
+auto_tune = st.sidebar.checkbox("🤖 Auto-Tune Parameters", value=True, help="Let the math automatically calculate the best strictness and blur based on your image lighting and size.")
 
-# Dial 1: Fixes the Black Screen!
-threshold_val = st.sidebar.slider(
-    "Vessel Detection Strictness", 
-    min_value=1, max_value=50, value=5, step=1,
-    help="Lower this if the mask is black. Raise it if the mask looks like static noise."
-)
+st.sidebar.markdown("---")
+st.sidebar.write("**Manual Override** (Uncheck Auto-Tune to use these)")
 
-# Dial 2: Fixes the Cookie Cutter!
-blur_val = st.sidebar.slider(
-    "Cookie Cutter Blur Size", 
-    min_value=11, max_value=151, value=41, step=2,
-    help="Controls how much of the egg is kept. Must be an odd number."
-)
+threshold_val = st.sidebar.slider("Vessel Strictness", min_value=1, max_value=50, value=5, step=1, disabled=auto_tune)
+blur_val = st.sidebar.slider("Cookie Cutter Blur Size", min_value=11, max_value=201, value=41, step=2, disabled=auto_tune)
 
-def analyze_cam_vessels(img, thresh_val, blur_size):
+def analyze_cam_vessels(img, auto, thresh_manual, blur_manual):
     green_channel = img[:, :, 1] 
-    
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     enhanced_img = clahe.apply(green_channel)
     
+    # --- AUTO-TUNE LOGIC ---
+    if auto:
+        # Calculate blur based on image dimensions (approx 5% of width)
+        calc_blur = int(img.shape[1] * 0.05)
+        blur_size = calc_blur if calc_blur % 2 != 0 else calc_blur + 1
+    else:
+        blur_size = blur_manual
+
     # --- 1. EMBRYO DIAMETER (ROI MASK) ---
     blur = cv2.GaussianBlur(green_channel, (blur_size, blur_size), 0)
     _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -48,7 +46,6 @@ def analyze_cam_vessels(img, thresh_val, blur_size):
         cv2.drawContours(egg_mask, [largest_contour], -1, 255, thickness=cv2.FILLED)
         area = cv2.contourArea(largest_contour)
         embryo_diameter_px = 2 * np.sqrt(area / np.pi)
-        
         kernel = np.ones((15, 15), np.uint8)
         egg_mask = cv2.erode(egg_mask, kernel, iterations=2)
 
@@ -57,8 +54,15 @@ def analyze_cam_vessels(img, thresh_val, blur_size):
     vessels = frangi(inverted_img, sigmas=range(1, 10, 2), black_ridges=False)
     vessels_norm = cv2.normalize(vessels, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
     
-    # *** HERE IS WHERE YOUR SLIDER CONNECTS TO THE MATH ***
-    _, binary_mask = cv2.threshold(vessels_norm, thresh_val, 255, cv2.THRESH_BINARY)
+    # --- AUTO-TUNE THRESHOLD ---
+    if auto:
+        # Use Otsu's method to find mathematical optimal split, but lower it by 50% to catch faint veins
+        otsu_thresh, _ = cv2.threshold(vessels_norm, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        final_thresh = max(1, int(otsu_thresh * 0.5))
+    else:
+        final_thresh = thresh_manual
+
+    _, binary_mask = cv2.threshold(vessels_norm, final_thresh, 255, cv2.THRESH_BINARY)
     binary_mask = cv2.bitwise_and(binary_mask, binary_mask, mask=egg_mask)
     
     total_area_px = np.sum(binary_mask > 0)
@@ -67,9 +71,7 @@ def analyze_cam_vessels(img, thresh_val, blur_size):
     bool_mask = binary_mask > 0
     skeleton = morphology.skeletonize(bool_mask)
     
-    kernel_conv = np.array([[1, 1, 1],
-                            [1, 10, 1],
-                            [1, 1, 1]])
+    kernel_conv = np.array([[1, 1, 1], [1, 10, 1], [1, 1, 1]])
     skeleton_int = skeleton.astype(np.uint8)
     filtered = convolve(skeleton_int, kernel_conv, mode='constant')
     
@@ -91,6 +93,8 @@ def analyze_cam_vessels(img, thresh_val, blur_size):
         cv2.circle(img_overlay, (x[i], y[i]), 3, (0, 0, 255), -1) 
         
     return {
+        "thresh_used": final_thresh,
+        "blur_used": blur_size,
         "embryo_diameter": int(embryo_diameter_px),
         "total_area": int(total_area_px),
         "total_length": int(total_length),
@@ -103,69 +107,86 @@ def analyze_cam_vessels(img, thresh_val, blur_size):
         "mask_img": egg_mask
     }
 
-# --- WEB APP LOGIC ---
-uploaded_file = st.file_uploader("Upload Image File Manually (JPG/PNG)", type=["jpg", "jpeg", "png"])
+# --- TABS LAYOUT ---
+tab1, tab2 = st.tabs(["🔬 Single Image Analysis", "⚖️ Compare Two Assays"])
 
-if uploaded_file is not None:
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    image = cv2.imdecode(file_bytes, 1)
-    
-    with st.spinner('Running Smart Analysis...'):
-        # Pass the slider values into our function
-        results = analyze_cam_vessels(image, threshold_val, blur_val)
-    
-    # --- VISUALS (Moved to the top so you can see changes instantly) ---
-    st.write("---")
-    st.subheader("📷 Live Tuning Results")
-    
-    img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    overlay_rgb = cv2.cvtColor(results['overlay_img'], cv2.COLOR_BGR2RGB)
-    
-    img_col1, img_col2 = st.columns(2)
-    with img_col1:
-        st.image(img_rgb, caption="Original Uploaded Image", use_container_width=True)
-        st.image(results['skeleton_img'], caption="Vessel Skeleton Mask", use_container_width=True, clamp=True)
+with tab1:
+    uploaded_file = st.file_uploader("Upload CAM Image (JPG/PNG)", type=["jpg", "jpeg", "png"], key="single")
+
+    if uploaded_file is not None:
+        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+        image = cv2.imdecode(file_bytes, 1)
         
-    with img_col2:
-        st.image(results['mask_img'], caption="Detection Zone (Cookie Cutter)", use_container_width=True, clamp=True)
-        st.image(overlay_rgb, caption="Detected Branch Points (Red Dots)", use_container_width=True)
+        with st.spinner('Running Smart Analysis...'):
+            results = analyze_cam_vessels(image, auto_tune, threshold_val, blur_val)
+        
+        # --- TOP: DISPLAY METRICS ---
+        st.success(f"Analysis Complete! (Used Threshold: {results['thresh_used']}, Blur: {results['blur_used']})")
+        
+        st.subheader("📊 Macro Measurements")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Embryo Diameter (px)", f"{results['embryo_diameter']:,}")
+        col2.metric("Total Vessel Area (px)", f"{results['total_area']:,}")
+        col3.metric("Detected Branch Points", f"{results['branches']:,}")
+        
+        st.subheader("🩸 Vessel Hierarchy (Length by Thickness)")
+        hc1, hc2, hc3, hc4 = st.columns(4)
+        hc1.metric("Total Length", f"{results['total_length']:,}")
+        hc2.metric("Primary Veins", f"{results['primary']:,}")
+        hc3.metric("Secondary Veins", f"{results['secondary']:,}")
+        hc4.metric("Tertiary Veins", f"{results['tertiary']:,}")
 
-    # --- DISPLAY METRICS ---
-    st.write("---")
-    st.subheader("📊 Macro Measurements")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Embryo Diameter (px)", f"{results['embryo_diameter']:,}")
-    col2.metric("Total Vessel Area (px)", f"{results['total_area']:,}")
-    col3.metric("Detected Branch Points", f"{results['branches']:,}")
-    
-    st.subheader("🩸 Vessel Hierarchy (Length by Thickness)")
-    hc1, hc2, hc3, hc4 = st.columns(4)
-    hc1.metric("Total Length", f"{results['total_length']:,}")
-    hc2.metric("Primary Veins", f"{results['primary']:,}")
-    hc3.metric("Secondary Veins", f"{results['secondary']:,}")
-    hc4.metric("Tertiary Veins", f"{results['tertiary']:,}")
-    
-    # --- CSV EXPORT ---
-    st.write("---")
-    st.subheader("💾 Export Results")
-    
-    df = pd.DataFrame([{
-        "Image Name": uploaded_file.name,
-        "Strictness Threshold Used": threshold_val,
-        "Embryo Diameter (px)": results['embryo_diameter'],
-        "Total Area (px)": results['total_area'],
-        "Total Length (px)": results['total_length'],
-        "Branch Intersections": results['branches'],
-        "Primary Vein Length (px)": results['primary'],
-        "Secondary Vein Length (px)": results['secondary'],
-        "Tertiary Vein Length (px)": results['tertiary']
-    }])
-    
-    csv = df.to_csv(index=False).encode('utf-8')
-    
-    st.download_button(
-        label="Download Data as CSV",
-        data=csv,
-        file_name=f"cam_analysis_{uploaded_file.name}.csv",
-        mime="text/csv",
-    )
+        # --- EXPORT ---
+        df = pd.DataFrame([{
+            "Image Name": uploaded_file.name,
+            "Embryo Diameter (px)": results['embryo_diameter'],
+            "Total Area (px)": results['total_area'],
+            "Total Length (px)": results['total_length'],
+            "Branch Intersections": results['branches'],
+            "Primary Vein Length": results['primary'],
+            "Secondary Vein Length": results['secondary'],
+            "Tertiary Vein Length": results['tertiary']
+        }])
+        st.download_button("💾 Download Data as CSV", data=df.to_csv(index=False).encode('utf-8'), file_name=f"cam_analysis.csv", mime="text/csv")
+        
+        # --- BOTTOM: COMPACT IMAGES ---
+        st.write("---")
+        st.subheader("📷 Visual Results")
+        
+        img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        overlay_rgb = cv2.cvtColor(results['overlay_img'], cv2.COLOR_BGR2RGB)
+        
+        # 4 columns side-by-side to make images small and fit without scrolling
+        c1, c2, c3, c4 = st.columns(4)
+        c1.image(img_rgb, caption="Original", use_container_width=True)
+        c2.image(results['mask_img'], caption="Detection Zone", use_container_width=True, clamp=True)
+        c3.image(results['skeleton_img'], caption="Vessel Skeleton", use_container_width=True, clamp=True)
+        c4.image(overlay_rgb, caption="Branch Points", use_container_width=True)
+
+with tab2:
+    st.write("Upload a Control egg and a Treated egg to see a direct data comparison.")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        egg_a = st.file_uploader("Upload Egg A (Control)", type=["jpg", "jpeg", "png"], key="egg_a")
+    with col_b:
+        egg_b = st.file_uploader("Upload Egg B (Treated)", type=["jpg", "jpeg", "png"], key="egg_b")
+
+    if egg_a and egg_b:
+        with st.spinner('Analyzing both assays...'):
+            img_a = cv2.imdecode(np.asarray(bytearray(egg_a.read()), dtype=np.uint8), 1)
+            img_b = cv2.imdecode(np.asarray(bytearray(egg_b.read()), dtype=np.uint8), 1)
+            
+            res_a = analyze_cam_vessels(img_a, auto_tune, threshold_val, blur_val)
+            res_b = analyze_cam_vessels(img_b, auto_tune, threshold_val, blur_val)
+            
+        st.subheader("📊 Comparison Chart")
+        
+        # Create a combined dataframe for the bar chart
+        comp_df = pd.DataFrame({
+            "Metric": ["Total Length", "Branch Points", "Embryo Diameter", "Vessel Area"],
+            "Egg A (Control)": [res_a['total_length'], res_a['branches'], res_a['embryo_diameter'], res_a['total_area']],
+            "Egg B (Treated)": [res_b['total_length'], res_b['branches'], res_b['embryo_diameter'], res_b['total_area']]
+        }).set_index("Metric")
+        
+        # Display an interactive bar chart
+        st.bar_chart(comp_df, height=400)
