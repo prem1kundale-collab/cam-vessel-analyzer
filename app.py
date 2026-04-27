@@ -33,11 +33,39 @@ st.sidebar.write("**Manual Override**")
 threshold_val = st.sidebar.slider("Vessel Strictness", 1, 50, 5, disabled=auto_tune)
 blur_val = st.sidebar.slider("Cookie Cutter Blur", 11, 201, 41, step=2, disabled=auto_tune)
 
+# --- SYNCED SLIDERS & NUMBER BOXES ---
 st.sidebar.markdown("---")
 st.sidebar.write("**🩸 Vein Classification Tuning**")
-primary_thresh = st.sidebar.slider("Primary Min Radius (px)", 1.0, 20.0, 3.0, step=0.5)
-secondary_thresh = st.sidebar.slider("Secondary Min Radius (px)", 0.5, 10.0, 1.5, step=0.5)
 
+# 1. Initialize memory banks for the numbers
+if 'p_thresh' not in st.session_state:
+    st.session_state.p_thresh = 3.0
+if 's_thresh' not in st.session_state:
+    st.session_state.s_thresh = 1.5
+
+# 2. Callback functions to sync the widgets
+def update_p_from_slider(): st.session_state.p_thresh = st.session_state.p_sl
+def update_p_from_num(): st.session_state.p_thresh = st.session_state.p_nm
+def update_s_from_slider(): st.session_state.s_thresh = st.session_state.s_sl
+def update_s_from_num(): st.session_state.s_thresh = st.session_state.s_nm
+
+# 3. Draw the Primary UI (Slider + Box)
+st.sidebar.caption("🟥 Primary Min Radius (px)")
+pc1, pc2 = st.sidebar.columns([3, 2])
+pc1.slider("P_Slider", 1.0, 20.0, step=0.5, key="p_sl", value=st.session_state.p_thresh, on_change=update_p_from_slider, label_visibility="collapsed")
+pc2.number_input("P_Num", 0.1, 500.0, step=0.5, key="p_nm", value=st.session_state.p_thresh, on_change=update_p_from_num, label_visibility="collapsed")
+
+# 4. Draw the Secondary UI (Slider + Box)
+st.sidebar.caption("🟩 Secondary Min Radius (px)")
+sc1, sc2 = st.sidebar.columns([3, 2])
+sc1.slider("S_Slider", 0.5, 10.0, step=0.5, key="s_sl", value=st.session_state.s_thresh, on_change=update_s_from_slider, label_visibility="collapsed")
+sc2.number_input("S_Num", 0.1, 500.0, step=0.5, key="s_nm", value=st.session_state.s_thresh, on_change=update_s_from_num, label_visibility="collapsed")
+
+# Assign the final synced values to our math variables
+primary_thresh = st.session_state.p_thresh
+secondary_thresh = st.session_state.s_thresh
+
+# --- CORE MATH ENGINE ---
 def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thresh):
     green_channel = img[:, :, 1] 
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
@@ -99,12 +127,10 @@ def analyze_cam_vessels(img, auto, thresh_manual, blur_manual, p_thresh, s_thres
     secondary_mask = (skeleton) & (dist_transform > s_thresh) & (dist_transform <= p_thresh)
     tertiary_mask = (skeleton) & (dist_transform > 0) & (dist_transform <= s_thresh)
     
-    # Calculate Lengths (Sum of pixels)
     primary_length_px = np.sum(primary_mask)
     secondary_length_px = np.sum(secondary_mask)
     tertiary_length_px = np.sum(tertiary_mask)
     
-    # Calculate Counts (Connected Components Analysis)
     num_p, _ = cv2.connectedComponents((primary_mask.astype(np.uint8) * 255))
     num_s, _ = cv2.connectedComponents((secondary_mask.astype(np.uint8) * 255))
     num_t, _ = cv2.connectedComponents((tertiary_mask.astype(np.uint8) * 255))
@@ -179,14 +205,12 @@ with tab1:
         st.write("---")
         st.subheader(f"🩸 Vessel Hierarchy (Lengths vs. Counts)")
         
-        # Row for Lengths
         hc1, hc2, hc3, hc4 = st.columns(4)
         hc1.metric(f"Total Length ({u_label})", f"{results['total_length']:,.2f}")
         hc2.metric(f"🟥 Primary Length", f"{results['primary_len']:,.2f}")
         hc3.metric(f"🟩 Secondary Length", f"{results['secondary_len']:,.2f}")
         hc4.metric(f"🟦 Tertiary Length", f"{results['tertiary_len']:,.2f}")
         
-        # Row for Counts
         cc1, cc2, cc3, cc4 = st.columns(4)
         total_segments = results['primary_count'] + results['secondary_count'] + results['tertiary_count']
         cc1.metric("Total Segments (Count)", f"{total_segments:,}")
